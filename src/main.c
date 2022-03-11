@@ -5,7 +5,10 @@
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
+#include <sys/printk.h>
 
 int main() {
-    return 0;
+    while (1) {
+        printk("Spinning\n");
+    }
 }
