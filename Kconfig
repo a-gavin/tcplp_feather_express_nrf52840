@@ -11,3 +11,7 @@ mainmenu "TCPlp on Feather Express nrf52840"
 # to 'source' relative to the current Kconfig file instead, use 'rsource' (or a
 # path relative to the Zephyr root).
 source "Kconfig.zephyr"
+
+module = OT_COMMAND_LINE_INTERFACE
+module-str = ot_cli
+source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"

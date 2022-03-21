@@ -6,6 +6,10 @@ set(BOARD "adafruit_feather_nrf52840")
 set(BOARD_FLASH_RUNNER "pyocd")
 set(BOARD_DEBUG_RUNNER "pyocd")
 
+# Set addtl configuration for USB UART I/O
+set(OVERLAY_CONFIG "overlay-usb.conf")
+set(DTC_OVERLAY_FILE "usb.overlay")
+
 find_package(Zephyr)
 project(tcplp_feather_express_nrf52840)
 
