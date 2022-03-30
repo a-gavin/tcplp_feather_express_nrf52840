@@ -1,0 +1,30 @@
+Device 1:
+1a.
+ot dataset init new
+ot dataset commit active
+ot dataset
+ot ifconfig up
+ot thread start
+ot state
+ot tcp init
+
+2a.
+ot tcp connect <> 30000
+ot tcp send teststring
+
+3.
+ot tcp benchmark
+ot tcp benchmark 100000
+
+
+Device 2:
+1b.
+ot dataset networkkey <>
+ot dataset panid <>
+ot dataset commit active
+ot ifconfig up
+ot thread start
+ot state
+ot tcp init
+ot tcp listen :: 30000
+ot ipaddr
