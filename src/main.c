@@ -8,7 +8,7 @@
 #include <zephyr.h>
 #include <logging/log.h>
 
-LOG_MODULE_REGISTER(cli_sample, CONFIG_OT_COMMAND_LINE_INTERFACE_LOG_LEVEL);
+LOG_MODULE_REGISTER(tcp_app, LOG_LEVEL_DBG);
 
 #include <drivers/uart.h>
 #include <usb/usb_device.h>
