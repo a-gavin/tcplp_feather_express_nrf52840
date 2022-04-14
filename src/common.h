@@ -20,7 +20,7 @@
 #define LISTEN_BACKLOG_NUM 	10
 
 /* Globals */
-int sd, conn_sd;
+int sd = -1, conn_sd = -1;
 
 #if IS_LISTENER == 1
 char recv_buf[MAXBUFSIZE+1];

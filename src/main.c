@@ -12,6 +12,14 @@ LOG_MODULE_REGISTER(tcp_app, LOG_LEVEL_DBG);
 
 void cmd_init() {
 	/* Setup socket for TCP conn_sdections */
+	if (sd >= 0) {
+		LOG_ERR("Socket already initialized");
+		return;
+	} else if (conn_sd >= 0) {
+		LOG_ERR("Connection already initialized");
+		return;
+	}
+
 	sd = socket(AF_INET6, SOCK_STREAM, 0);
 	if (sd < 0) {
 		LOG_ERR("Failed to create TCP socket (IPv6): %d", -errno);
@@ -91,6 +99,8 @@ void cmd_connect() {
 
 #if IS_LISTENER == 1
 void cmd_benchmark_recv() {
+	ssize_t bytes_in_benchmark, bytes_recvd, total_bytes_recvd;
+
 	if (sd < 0) {
 		LOG_ERR("Must initialize session before running \"bencmark_recv\"");
 		return;
@@ -99,20 +109,47 @@ void cmd_benchmark_recv() {
 		return;
 	}
 
-	ssize_t bytes_recvd = recv(conn_sd, recv_buf, sizeof(char)*MAXBUFSIZE, 0);
-	LOG_DBG("Num bytes recv: %d", bytes_recvd);
+	/* 1. Determine total number of bytes to recv */
+	LOG_DBG("Waiting to receive number of bytes in benchmark");
+	bytes_recvd = recv(conn_sd, &bytes_in_benchmark, sizeof(ssize_t), 0);
 	if (bytes_recvd < 0) {
 		LOG_ERR("Receive failed: %d", -errno);
 		return;
-	} else if (bytes_recvd != MAXBUFSIZE) {
-		LOG_ERR("Receive failed: received %d bytes, not %d bytes", bytes_recvd, MAXBUFSIZE);
+	}
+
+	/* 2. Notify connector to start benchmark by sending recvd value back */
+	LOG_DBG("Benchmark size %d bytes. Sending back to synchronize", bytes_in_benchmark);
+	if (send(conn_sd, &bytes_in_benchmark, sizeof(ssize_t), 0) < 0) {
+		LOG_ERR("Send failed: %d", -errno);
 		return;
 	}
-	recv_buf[MAXBUFSIZE] = '\0';
-	LOG_DBG("Recv output: %s", log_strdup(recv_buf));
+
+	/* 3. Receive benchmark data */
+	LOG_DBG("Beginning benchmark");
+	total_bytes_recvd = 0;
+	while (total_bytes_recvd < bytes_in_benchmark
+		&& (bytes_recvd = recv(conn_sd, recv_buf, sizeof(char)*bytes_in_benchmark, 0)) > 0) {
+			total_bytes_recvd += bytes_recvd;
+			LOG_DBG("Received %d bytes", bytes_recvd);
+	}
+	if (bytes_recvd < 0) {
+		LOG_ERR("Receive failed: %d", -errno);
+		cmd_quit();
+		return;
+	}
+
+	/* 4. Send amount of data received to end benchmark */
+	LOG_DBG("Received %d bytes total", total_bytes_recvd);
+	if (send(conn_sd, &total_bytes_recvd, sizeof(ssize_t), 0) < 0) {
+		LOG_ERR("Send failed: %d", -errno);
+		return;
+	}
+	LOG_DBG("Ending benchmark");
 }
 #else
 void cmd_benchmark_send() {
+	ssize_t bytes_in_benchmark, bytes_recvd, bytes_sent, ret, total_bytes_sent;
+
 	if (sd < 0) {
 		LOG_ERR("Must initialize session before running \"bencmark_recv\"");
 		return;
@@ -121,15 +158,56 @@ void cmd_benchmark_send() {
 		return;
 	}
 
-	ssize_t bytes_sent = send(conn_sd, send_buf, sizeof(char)*MAXBUFSIZE, 0);
-	LOG_DBG("Num bytes sent: %d", bytes_sent);
+	/* 0. Initialize benchmark parameters */
+	bytes_in_benchmark = 2*MAXBUFSIZE;
+
+	/* 1. Send listener number of bytes to receive */
+	LOG_DBG("Sending number of bytes in benchmark (%d bytes)", bytes_in_benchmark);
+	ret = send(conn_sd, &bytes_in_benchmark, sizeof(ssize_t), 0);
+	if (ret < 0) {
+		LOG_ERR("Send failed: %d", -errno);
+		return;
+	}
+
+	/* 2. Receive value sent to connector, syncing devices before running test */
+	LOG_DBG("Receiving back to synchronize");
+	if (recv(conn_sd, &bytes_recvd, sizeof(ssize_t), 0) < 0) {
+		LOG_ERR("Receive failed: %d", -errno);
+		return;
+	}
+
+	/* 3. Begin benchmark */
+	LOG_DBG("Beginning benchmark");
+	// TODO: Begin timer
+	total_bytes_sent = 0;
+	do {
+		bytes_sent = send(conn_sd, send_buf, sizeof(char)*MAXBUFSIZE, 0);
+		total_bytes_sent += bytes_sent;
+		LOG_DBG("Sent %d bytes", bytes_sent);
+	} while (bytes_sent > 0 && total_bytes_sent < bytes_in_benchmark);
+
 	if (bytes_sent < 0) {
 		LOG_ERR("Send failed: %d", -errno);
 		return;
-	} else if (bytes_sent != MAXBUFSIZE) {
-		LOG_ERR("Send failed: sent %d bytes, not %d bytes", bytes_sent, MAXBUFSIZE);
+	}
+
+	/* 4. End benchmark, verifying number of bytes sent
+	 *    equal to number of bytes received by listener
+	 */
+	LOG_DBG("Receiving number of bytes sent");
+	ret = recv(conn_sd, &bytes_recvd, sizeof(ssize_t), 0);
+	// TODO: end timer
+
+	if (ret < 0) {
+		LOG_ERR("Receive failed: %d", -errno);
+		return;
+	} else if (bytes_in_benchmark != bytes_recvd) {
+		LOG_ERR("Bytes received (%d) not equal to total bytes sent (%d)", bytes_recvd, bytes_in_benchmark);
 		return;
 	}
+	LOG_DBG("Bytes sent (%d) equals total bytes sent (%d)", bytes_recvd, bytes_in_benchmark);
+
+	/* 5. Calculate and print goodput */
 }
 #endif
 
