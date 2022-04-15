@@ -6,11 +6,13 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include <logging/log.h>
-LOG_MODULE_REGISTER(tcp_app, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(tcp_app, LOG_LEVEL_INF);
 
 #include "common.h"
 
-void cmd_init() {
+void cmd_init(const struct shell *sh, int argc, char **argv) {
+	int usr_spec_bufsize;
+
 	/* Setup socket for TCP conn_sdections */
 	if (sd >= 0) {
 		LOG_ERR("Socket already initialized");
@@ -20,17 +22,33 @@ void cmd_init() {
 		return;
 	}
 
+	/* Set buffer size if passed to init */
+	if (argc == 2) {
+		usr_spec_bufsize = atoi(argv[1]);
+
+		if (usr_spec_bufsize > MAXBUFSIZE) {
+			shell_print(sh, "Requested buffer size %d bytes larger than MAXBUFSIZE (%d) bytes", usr_spec_bufsize, MAXBUFSIZE);
+			usr_spec_bufsize = MAXBUFSIZE;
+		} else if (usr_spec_bufsize <= 0) {
+			LOG_ERR("Requested buffer size must be positive");
+			return;
+		}
+
+		shell_print(sh, "New buffer size is %d bytes, previously was %d bytes", usr_spec_bufsize, buf_size);
+		buf_size = usr_spec_bufsize;
+	}
+
 	sd = socket(AF_INET6, SOCK_STREAM, 0);
 	if (sd < 0) {
 		LOG_ERR("Failed to create TCP socket (IPv6): %d", -errno);
 		sd = 0;
 		return;
 	}
-	LOG_DBG("Initialized socket");
+	shell_print(sh, "Initialized socket");
 }
 
 #if IS_LISTENER == 1
-void cmd_listen() {
+void cmd_listen(const struct shell *sh) {
 	int ret;
 	struct sockaddr_in6 host_addr;
 	struct sockaddr_in6 conn_addr;
@@ -61,7 +79,7 @@ void cmd_listen() {
 		ret = -errno;
 	}
 
-	LOG_DBG("Waiting for TCP connection on port %d (IPv6)...", APP_PORT);
+	shell_print(sh, "Waiting for TCP connection on port %d (IPv6)...", APP_PORT);
 	conn_sd = accept(sd, (struct sockaddr *) &conn_addr, &conn_addr_len);
 	if (conn_sd < 0) {
 		LOG_ERR("IPv6 accept error (%d)", -errno);
@@ -69,10 +87,10 @@ void cmd_listen() {
 	}
 
 	inet_ntop(conn_addr.sin6_family, &conn_addr.sin6_addr, addr_str, sizeof(addr_str));
-	LOG_DBG("TCP (IPv6): Accepted connection from %s", log_strdup(addr_str));
+	shell_print(sh, "TCP (IPv6): Accepted connection from %s", addr_str);
 }
 #else
-void cmd_connect() {
+void cmd_connect(const struct shell *sh) {
 	struct sockaddr_in6 conn_addr;
 	socklen_t conn_addr_len = sizeof(conn_addr);
 
@@ -93,12 +111,12 @@ void cmd_connect() {
 	if (conn_sd < 0) {
 		LOG_ERR("Failed to connect: %d", -errno);
 	}
-	LOG_DBG("Successfully connected");
+	shell_print(sh, "Successfully connected");
 }
 #endif
 
 #if IS_LISTENER == 1
-void cmd_benchmark_recv() {
+void cmd_benchmark_recv(const struct shell *sh) {
 	ssize_t bytes_in_benchmark, bytes_recvd, total_bytes_recvd;
 
 	if (sd < 0) {
@@ -110,7 +128,7 @@ void cmd_benchmark_recv() {
 	}
 
 	/* 1. Determine total number of bytes to recv */
-	LOG_DBG("Waiting to receive number of bytes in benchmark");
+	shell_print(sh, "Waiting to receive number of bytes in benchmark");
 	bytes_recvd = recv(conn_sd, &bytes_in_benchmark, sizeof(ssize_t), 0);
 	if (bytes_recvd < 0) {
 		LOG_ERR("Receive failed: %d", -errno);
@@ -118,17 +136,17 @@ void cmd_benchmark_recv() {
 	}
 
 	/* 2. Notify connector to start benchmark by sending recvd value back */
-	LOG_DBG("Benchmark size %d bytes. Sending back to synchronize", bytes_in_benchmark);
+	shell_print(sh, "Benchmark size %d bytes. Sending back to synchronize", bytes_in_benchmark);
 	if (send(conn_sd, &bytes_in_benchmark, sizeof(ssize_t), 0) < 0) {
 		LOG_ERR("Send failed: %d", -errno);
 		return;
 	}
 
-	/* 3. Receive benchmark data */
-	LOG_DBG("Beginning benchmark");
+	/* 3. Receive benchmark data in "buf_size" chunks */
+	shell_print(sh, "Beginning benchmark");
 	total_bytes_recvd = 0;
 	while (total_bytes_recvd < bytes_in_benchmark
-		&& (bytes_recvd = recv(conn_sd, recv_buf, sizeof(char)*bytes_in_benchmark, 0)) > 0) {
+		&& (bytes_recvd = recv(conn_sd, recv_buf, sizeof(char)*buf_size, 0)) > 0) {
 			total_bytes_recvd += bytes_recvd;
 			LOG_DBG("Received %d bytes", bytes_recvd);
 	}
@@ -139,15 +157,16 @@ void cmd_benchmark_recv() {
 	}
 
 	/* 4. Send amount of data received to end benchmark */
-	LOG_DBG("Received %d bytes total", total_bytes_recvd);
+	shell_print(sh, "Received %d bytes total", total_bytes_recvd);
 	if (send(conn_sd, &total_bytes_recvd, sizeof(ssize_t), 0) < 0) {
 		LOG_ERR("Send failed: %d", -errno);
 		return;
 	}
-	LOG_DBG("Ending benchmark");
+	shell_print(sh, "Ending benchmark");
 }
 #else
-void cmd_benchmark_send() {
+void cmd_benchmark_send(const struct shell *sh, size_t argc, char **argv) {
+	uint32_t cur_cycle_count, time_start_ms, time_delta_ms, thousand_times_goodput;
 	ssize_t bytes_in_benchmark, bytes_recvd, bytes_sent, ret, total_bytes_sent;
 
 	if (sd < 0) {
@@ -159,10 +178,22 @@ void cmd_benchmark_send() {
 	}
 
 	/* 0. Initialize benchmark parameters */
-	bytes_in_benchmark = 2*MAXBUFSIZE;
+	if (argc > 1) {
+		bytes_in_benchmark = (ssize_t) atoi(argv[1]);
+
+		if (bytes_in_benchmark <= 0) {
+			LOG_ERR("Requested benchmark size must be greater than 0");
+			return;
+		} else if (bytes_in_benchmark < buf_size) {
+			shell_warn(sh, "Requested benchmark size (%d bytes) is smaller than buffer size (%d bytes)", bytes_in_benchmark, buf_size);
+			buf_size = bytes_in_benchmark;
+		}
+	} else {
+		bytes_in_benchmark = (72 << 10);
+	}
 
 	/* 1. Send listener number of bytes to receive */
-	LOG_DBG("Sending number of bytes in benchmark (%d bytes)", bytes_in_benchmark);
+	shell_print(sh, "Sending number of bytes in benchmark (%d bytes)", bytes_in_benchmark);
 	ret = send(conn_sd, &bytes_in_benchmark, sizeof(ssize_t), 0);
 	if (ret < 0) {
 		LOG_ERR("Send failed: %d", -errno);
@@ -170,18 +201,19 @@ void cmd_benchmark_send() {
 	}
 
 	/* 2. Receive value sent to connector, syncing devices before running test */
-	LOG_DBG("Receiving back to synchronize");
+	shell_print(sh, "Receiving back to synchronize");
 	if (recv(conn_sd, &bytes_recvd, sizeof(ssize_t), 0) < 0) {
 		LOG_ERR("Receive failed: %d", -errno);
 		return;
 	}
 
 	/* 3. Begin benchmark */
-	LOG_DBG("Beginning benchmark");
-	// TODO: Begin timer
+	shell_print(sh, "Beginning benchmark");
+	cur_cycle_count = k_cycle_get_32();
+	time_start_ms = k_cyc_to_ms_ceil32(cur_cycle_count);
 	total_bytes_sent = 0;
 	do {
-		bytes_sent = send(conn_sd, send_buf, sizeof(char)*MAXBUFSIZE, 0);
+		bytes_sent = send(conn_sd, send_buf, sizeof(char)*buf_size, 0);
 		total_bytes_sent += bytes_sent;
 		LOG_DBG("Sent %d bytes", bytes_sent);
 	} while (bytes_sent > 0 && total_bytes_sent < bytes_in_benchmark);
@@ -194,9 +226,11 @@ void cmd_benchmark_send() {
 	/* 4. End benchmark, verifying number of bytes sent
 	 *    equal to number of bytes received by listener
 	 */
-	LOG_DBG("Receiving number of bytes sent");
+	shell_print(sh, "Receiving number of bytes sent");
 	ret = recv(conn_sd, &bytes_recvd, sizeof(ssize_t), 0);
-	// TODO: end timer
+
+	cur_cycle_count = k_cycle_get_32();
+	time_delta_ms = k_cyc_to_ms_ceil32(cur_cycle_count) - time_start_ms;
 
 	if (ret < 0) {
 		LOG_ERR("Receive failed: %d", -errno);
@@ -205,13 +239,15 @@ void cmd_benchmark_send() {
 		LOG_ERR("Bytes received (%d) not equal to total bytes sent (%d)", bytes_recvd, bytes_in_benchmark);
 		return;
 	}
-	LOG_DBG("Bytes sent (%d) equals total bytes sent (%d)", bytes_recvd, bytes_in_benchmark);
+	shell_print(sh, "Benchmark complete. Sent %u bytes in %u milliseconds", bytes_recvd, time_delta_ms);
 
 	/* 5. Calculate and print goodput */
+	thousand_times_goodput = (1000 * (bytes_in_benchmark << 3) + (time_delta_ms >> 1)) / time_delta_ms;
+	shell_print(sh, "Goodput: %u.%03u kb/s", thousand_times_goodput / 1000, thousand_times_goodput % 1000);
 }
 #endif
 
-void cmd_quit() {
+void cmd_quit(const struct shell *sh) {
 	/* Tear down connection (if setup) and socket */
 	if (sd < 0) {
 		LOG_ERR("Must initialize session before running \"quit\"");
@@ -219,11 +255,11 @@ void cmd_quit() {
 	}
 
 	if (conn_sd >= 0) {
-		LOG_DBG("Closing connection.");
+		shell_print(sh, "Closing connection");
 		close(conn_sd);
 	}
 
-	LOG_DBG("Closing socket.");
+	shell_print(sh, "Closing socket");
 	close(sd);
 }
 
@@ -267,10 +303,10 @@ void main() {
 #endif
 
 #if IS_LISTENER == 1
-	LOG_DBG("Listener device running");
+	LOG_INF("Listener device running");
 	memset(&recv_buf, 'o', MAXBUFSIZE);
 #else
-	LOG_DBG("Connector device running");
+	LOG_INF("Connector device running");
 	memset(&send_buf, 'x', MAXBUFSIZE);
 #endif
 }
