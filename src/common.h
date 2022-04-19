@@ -30,6 +30,16 @@
 #define MAXBUFSIZE			384
 #endif
 
+/* Redefine shell_print to no-op when debugging
+ * to enable non-CLI usage of benchmark funcs
+ */
+#if DEBUG == 1
+#ifdef shell_print
+#undef shell_print
+#define shell_print(...) ((void) 0)
+#endif
+#endif
+
 /* Globals */
 int sd = -1, conn_sd = -1;
 int buf_size = MAXBUFSIZE;

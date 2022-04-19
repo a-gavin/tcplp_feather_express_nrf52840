@@ -140,11 +140,11 @@ void cmd_benchmark_recv(const struct shell *sh) {
 	while (total_bytes_recvd < bytes_in_benchmark
 		&& (bytes_recvd = recv(conn_sd, recv_buf, sizeof(char)*buf_size, 0)) > 0) {
 			total_bytes_recvd += bytes_recvd;
-			LOG_DBG("Received %d bytes", bytes_recvd);
+			shell_print(sh, "Received %d bytes this iter, total %d bytes", bytes_recvd, total_bytes_recvd); // DEBUG
 	}
 	if (bytes_recvd < 0) {
 		LOG_ERR("Receive failed: %d", -errno);
-		cmd_quit();
+		shell_print(sh, "Receive failed: %d", -errno); // DEBUG
 		return;
 	}
 
@@ -265,7 +265,7 @@ void cmd_benchmark_send(const struct shell *sh, size_t argc, char **argv) {
 #endif
 
 void main() {
-#if DT_NODE_HAS_COMPAT(DT_CHOSEN(zephyr_shell_uart), zephyr_cdc_acm_uart)
+#if DEBUG == 0
 	/* Setup UART-based shell */
 	int ret;
 	const struct device *dev;
@@ -299,13 +299,16 @@ void main() {
 	(void)uart_line_ctrl_set(dev, UART_LINE_CTRL_DCD, 1);
 	/* Data Set Ready - the NCP SoC is ready to communicate */
 	(void)uart_line_ctrl_set(dev, UART_LINE_CTRL_DSR, 1);
-#else
-#error Application requires UART-based shell
 #endif
 
 #if IS_LISTENER == 1
 	LOG_INF("Listener device running");
 	memset(&recv_buf, 'o', MAXBUFSIZE);
+#if DEBUG == 1
+	cmd_init(NULL, 0, NULL);
+	cmd_listen(NULL);
+	cmd_benchmark_recv(NULL);
+#endif
 #else
 	LOG_INF("Connector device running");
 	memset(&send_buf, 'x', MAXBUFSIZE);
