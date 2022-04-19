@@ -10,6 +10,7 @@ LOG_MODULE_REGISTER(tcp_app, LOG_LEVEL_INF);
 
 #include "common.h"
 
+/* Common code */
 void cmd_init(const struct shell *sh, int argc, char **argv) {
 	int usr_spec_bufsize;
 
@@ -47,7 +48,24 @@ void cmd_init(const struct shell *sh, int argc, char **argv) {
 	shell_print(sh, "Initialized socket");
 }
 
+void cmd_quit(const struct shell *sh) {
+	/* Tear down connection (if setup) and socket */
+	if (sd < 0) {
+		LOG_ERR("Must initialize session before running \"quit\"");
+		return;
+	}
+
+	if (conn_sd >= 0) {
+		shell_print(sh, "Closing connection");
+		close(conn_sd);
+	}
+
+	shell_print(sh, "Closing socket");
+	close(sd);
+}
+
 #if IS_LISTENER == 1
+/* Listener-specific code */
 void cmd_listen(const struct shell *sh) {
 	int ret;
 	struct sockaddr_in6 host_addr;
@@ -89,33 +107,7 @@ void cmd_listen(const struct shell *sh) {
 	inet_ntop(conn_addr.sin6_family, &conn_addr.sin6_addr, addr_str, sizeof(addr_str));
 	shell_print(sh, "TCP (IPv6): Accepted connection from %s", addr_str);
 }
-#else
-void cmd_connect(const struct shell *sh) {
-	struct sockaddr_in6 conn_addr;
-	socklen_t conn_addr_len = sizeof(conn_addr);
 
-	if (sd < 0) {
-		LOG_ERR("Must initialize session before running \"listen\"");
-		return;
-	}
-
-	/* Connect to listening device */
-	(void)memset(&conn_addr, 0, conn_addr_len);
-	conn_addr.sin6_family = AF_INET6;
-	conn_addr.sin6_port = htons(APP_PORT);
-	if (inet_pton(AF_INET6, "2001:db8::1", &(conn_addr.sin6_addr)) != 1) {
-		LOG_ERR("Failed to translate address");
-	}
-
-	conn_sd = connect(sd, (struct sockaddr *) &conn_addr, conn_addr_len);
-	if (conn_sd < 0) {
-		LOG_ERR("Failed to connect: %d", -errno);
-	}
-	shell_print(sh, "Successfully connected");
-}
-#endif
-
-#if IS_LISTENER == 1
 void cmd_benchmark_recv(const struct shell *sh) {
 	ssize_t bytes_in_benchmark, bytes_recvd, total_bytes_recvd;
 
@@ -165,6 +157,31 @@ void cmd_benchmark_recv(const struct shell *sh) {
 	shell_print(sh, "Ending benchmark");
 }
 #else
+/* Connector-specific code */
+void cmd_connect(const struct shell *sh) {
+	struct sockaddr_in6 conn_addr;
+	socklen_t conn_addr_len = sizeof(conn_addr);
+
+	if (sd < 0) {
+		LOG_ERR("Must initialize session before running \"listen\"");
+		return;
+	}
+
+	/* Connect to listening device */
+	(void)memset(&conn_addr, 0, conn_addr_len);
+	conn_addr.sin6_family = AF_INET6;
+	conn_addr.sin6_port = htons(APP_PORT);
+	if (inet_pton(AF_INET6, "2001:db8::1", &(conn_addr.sin6_addr)) != 1) {
+		LOG_ERR("Failed to translate address");
+	}
+
+	conn_sd = connect(sd, (struct sockaddr *) &conn_addr, conn_addr_len);
+	if (conn_sd < 0) {
+		LOG_ERR("Failed to connect: %d", -errno);
+	}
+	shell_print(sh, "Successfully connected");
+}
+
 void cmd_benchmark_send(const struct shell *sh, size_t argc, char **argv) {
 	uint32_t cur_cycle_count, time_start_ms, time_delta_ms, thousand_times_goodput;
 	ssize_t bytes_in_benchmark, bytes_recvd, bytes_sent, ret, total_bytes_sent;
@@ -246,22 +263,6 @@ void cmd_benchmark_send(const struct shell *sh, size_t argc, char **argv) {
 	shell_print(sh, "Goodput: %u.%03u kb/s", thousand_times_goodput / 1000, thousand_times_goodput % 1000);
 }
 #endif
-
-void cmd_quit(const struct shell *sh) {
-	/* Tear down connection (if setup) and socket */
-	if (sd < 0) {
-		LOG_ERR("Must initialize session before running \"quit\"");
-		return;
-	}
-
-	if (conn_sd >= 0) {
-		shell_print(sh, "Closing connection");
-		close(conn_sd);
-	}
-
-	shell_print(sh, "Closing socket");
-	close(sd);
-}
 
 void main() {
 #if DT_NODE_HAS_COMPAT(DT_CHOSEN(zephyr_shell_uart), zephyr_cdc_acm_uart)
